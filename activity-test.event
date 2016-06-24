@@ -1,0 +1,162 @@
+%% print_trigger(all_defined_events).
+print_trigger(hla/_).
+
+/*
+    CONTEXT MANAGEMENT FLAGS & CONSTRAINTS
+*/
+
+score_compute_flag(mean).
+%% score_compute_flag(min).
+
+/*
+    UTILS
+*/
+
+%% aggr_score(+score1, +score2, -Res)
+%% Returns average of the two scores
+aggr_score(Score1, Score2, Res) :- score_compute_flag(mean), Res is (Score1+Score2)/2.
+
+%% aggr_score(+score1, +score2, -Res)
+%% Returns the minimum of the two scores
+aggr_score(Score1, Score2, Res) :- score_compute_flag(min), Res is min(Score1,Score2).
+
+/*
+    CONTEXT MANAGEMENT RULES (for POS and LLA)
+*/
+
+%% Position constraints
+pos_score_diff_threshold(0.5).
+pos_score_valid_threshold(0.5).
+pos_max_rule_window(2).
+
+%% Validity extension of atomic pos(+User,+Location,meta(+LastUpdate,+Confidence))
+%% events, when no complex event (extended interval) is available for extension
+r_pos_1 'rule:' pos(U,X,meta(L2, Score))
+    <-  (pos(U,X,meta(L1,Score1)) 'timestamp' t1(T1), t2(T1))
+        'seq'
+        (pos(U,X,meta(L2,Score2)) 'timestamp' t1(T2), t2(T2))
+        'fnot'
+        (pos(U,X,meta(_,_)) 'timestamp' t1(T3), t2(T1), less_datime(T3,T1))
+        'where' (
+            pos_score_valid_threshold(ValidThresh),
+            Score1 > ValidThresh,
+            Score2 > ValidThresh,
+            pos_score_diff_threshold(Thresh),
+            abs(Score1 - Score2) < Thresh,
+            aggr_score(Score1,Score2,Score)
+        ).
+
+%% Validity extension of a complex pos(+User,+Location,meta(+LastUpdate,+Confidence))
+%% event with a newly added atomic event, subject to rule window constraints
+r_pos_2 'rule:' pos(U,X,meta(L2, Score))
+    <-  (pos(U,X,meta(L1,Score1)) 'timestamp' t1(T1), t2(T2), less_datime(T1,T2))
+        'seq'
+        (pos(U,X,meta(L2,Score2)) 'timestamp' t1(T3), t2(T3))
+        'where' (
+            pos_score_valid_threshold(ValidThresh),
+            Score2 > ValidThresh,
+            pos_max_rule_window(MaxTDiff),
+            datime_minus_datime(T3,T2,TDiff),
+            TDiff =< MaxTDiff,
+            pos_score_diff_threshold(Thresh),
+            abs(Score1 - Score2) < Thresh,
+            aggr_score(Score1,Score2,Score)
+        ).
+
+%% Low level activity constraints
+lla_score_diff_threshold(0.5).
+lla_score_valid_threshold(0.5).
+lla_max_rule_window(2).
+
+%% Validity extension of atomic lla(+User,+Activity,meta(+LastUpdate,+Confidence))
+%% events, when no complex event (extended interval) is available for extension
+r_lla_1 'rule:' lla(U,X,meta(L2, Score))
+    <-  (lla(U,X,meta(L1,Score1)) 'timestamp' t1(T1), t2(T1))
+        'seq'
+        (lla(U,X,meta(L2,Score2)) 'timestamp' t1(T2), t2(T2))
+        'fnot'
+        (lla(U,X,meta(_,_)) 'timestamp' t1(T3), t2(T1), less_datime(T3,T1))
+        'where' (
+            lla_score_valid_threshold(ValidThresh),
+            Score1 > ValidThresh,
+            Score2 > ValidThresh,
+            lla_score_diff_threshold(Thresh),
+            abs(Score1 - Score2) < Thresh,
+            aggr_score(Score1,Score2,Score)
+        ).
+
+%% Validity extension of a complex lla(+User,+Activity,meta(+LastUpdate,+Confidence))
+%% event with a newly added atomic event, subject to rule window constraints
+r_lla_2 'rule:' lla(U,X,meta(L2, Score))
+    <-  (lla(U,X,meta(L1,Score1)) 'timestamp' t1(T1), t2(T2), less_datime(T1,T2))
+        'seq'
+        (lla(U,X,meta(L2,Score2)) 'timestamp' t1(T3), t2(T3))
+        'where' (
+            lla_score_valid_threshold(ValidThresh),
+            Score2 > ValidThresh,
+            lla_max_rule_window(MaxTDiff),
+            datime_minus_datime(T3,T2,TDiff),
+            TDiff =< MaxTDiff,
+            lla_score_diff_threshold(Thresh),
+            abs(Score1 - Score2) < Thresh,
+            aggr_score(Score1,Score2,Score)
+        ).
+
+/*
+    DOMAIN RULES
+*/
+
+%% High level activity constraints
+hla_max_rule_window(2).
+hla_max_gap(5).
+
+%% Validity extension of a complex hla(+User,+Activity,meta(+LastUpdate,+Confidence))
+%% event with a newly added atomic event, subject to rule window constraints
+r_hla_0 'rule:' hla(U,X,meta(L,ScoreHLA))
+    <-  (hla(U,X,meta(L1,Score1)) 'timestamp' t1(T1), t2(T2))
+        'parneq'
+        (hla(U,X,meta(L2,Score2)) 'timestamp' t1(T3), t2(T4))
+        'where' (
+            L is max(L1,L2),
+            aggr_score(Score1,Score2,ScoreHLA)
+        ).
+
+/* 
+TODO 1 - High Level Activity inference rules.
+
+Design two rules which inffer high level activities as follows:
+    1. given a user positioned in the work_area in a sitting
+    posture, he is (probably) working
+    2. given a user positioned in the dining_area in a sitting
+    posture, he is (probably) dining
+
+Rule template:
+<rule_id> 'rule' <hla(...)>
+    <-  <pos(...)>
+        'seq'
+        <lla(...)>
+        'where' (
+            %% Establish last update
+            %% Aggregate score
+        ).
+*/
+
+/*
+TODO 2 - Error correction rule
+
+When two non-overlaping high level activity events occur with a time gap
+between which is lower than TGap, given hla_max_gap(TGap), generate
+a new high level activity event which covers the entire interval (including
+the gap) and with an aggregated confidence score
+
+Rule template:
+<rule_id> 'rule' <hla(...)>
+    <-  <hla(...)>
+        'seq'
+        <hla(...)>
+        'where' (
+            %% Test gap
+            %% Establish last update
+            %% Aggregate score
+        ).
+*/
